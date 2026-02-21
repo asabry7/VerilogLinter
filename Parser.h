@@ -9,307 +9,368 @@
 
 #include "Lexer.h"
 
-// ==========================================
-// 1. UTILITIES
-// ==========================================
-
-/**
- * @brief Helper structure to enable easy lambda-based visitation for std::visit.
- *
- * Allows passing multiple lambda expressions to handle different types
- * inside a std::variant.
- */
-template <class... Ts>
-struct overloaded : Ts...
+/* Helpers to use std::visit */
+template <class... Types>
+struct overloaded : Types...
 {
-    using Ts::operator()...;
+    using Types::operator()...;
 };
-
-// Deduction guide for the overloaded struct (Requires C++17)
-template <class... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
-
-// ==========================================
-// 2. MEMORY MANAGEMENT
-// ==========================================
+template <class... Types>
+overloaded(Types...) -> overloaded<Types...>;
 
 /**
- * @brief Memory arena for Abstract Syntax Tree (AST) node allocations.
+ * @brief A memory arena for fast, bump-pointer allocation of AST nodes.
  *
- * Uses std::pmr::monotonic_buffer_resource to provide fast, contiguous memory
- * allocations. Memory is automatically reclaimed when the arena is destroyed,
- * eliminating the need for manual memory management (e.g., delete) for AST nodes.
+ * Backed by a @c std::pmr::monotonic_buffer_resource, all allocations are
+ * made in O(1) time and freed together when the arena is destroyed. This
+ * avoids the overhead of individual @c new / @c delete calls per node.
+ *
+ * Nodes allocated here must not be individually deleted; their lifetime is
+ * tied to the arena.
  */
-class AstArena
+class AbstractSyntaxTreeArena
 {
     std::pmr::monotonic_buffer_resource memory_pool;
 
 public:
     /**
-     * @brief Get a polymorphic allocator tied to this arena.
-     * @return std::pmr::polymorphic_allocator<std::byte>
+     * @brief Returns a polymorphic allocator backed by this arena.
+     *
+     * Suitable for constructing PMR-aware containers (e.g., @c std::pmr::vector)
+     * whose memory is managed by this arena.
+     *
+     * @return A @c std::pmr::polymorphic_allocator<std::byte> tied to the internal pool.
      */
-    std::pmr::polymorphic_allocator<std::byte> allocator()
+    std::pmr::polymorphic_allocator<std::byte> get_allocator()
     {
         return std::pmr::polymorphic_allocator<std::byte>(&memory_pool);
     }
 
     /**
-     * @brief Allocates and constructs an object of type T in the arena.
+     * @brief Allocates and constructs a single AST node of type @p NodeType.
      *
-     * @tparam T The type of object to allocate.
-     * @tparam Args The types of arguments for T's constructor.
-     * @param args Arguments forwarded to T's constructor.
-     * @return T* Pointer to the newly allocated and constructed object.
+     * Memory is drawn from the internal monotonic pool. The node is
+     * constructed in-place using perfect forwarding of the supplied arguments.
+     *
+     * @tparam NodeType             The AST node type to allocate.
+     * @tparam ConstructorArguments Types of arguments forwarded to the constructor.
+     * @param  arguments            Arguments forwarded to @p NodeType's constructor.
+     * @return A non-owning pointer to the newly constructed node.
+     *         The pointer remains valid until the arena is destroyed.
      */
-    template <typename T, typename... Args>
-    T *alloc(Args &&...args)
+    template <typename NodeType, typename... ConstructorArguments>
+    NodeType *allocate_node(ConstructorArguments &&...arguments)
     {
-        std::pmr::polymorphic_allocator<T> alloc(&memory_pool);
-        T *ptr = alloc.allocate(1);
-        alloc.construct(ptr, std::forward<Args>(args)...);
-        return ptr;
+        std::pmr::polymorphic_allocator<NodeType> type_allocator(&memory_pool);
+        NodeType *allocated_pointer = type_allocator.allocate(1);
+        type_allocator.construct(allocated_pointer, std::forward<ConstructorArguments>(arguments)...);
+        return allocated_pointer;
     }
 };
 
-// ==========================================
-// 3. AST FORWARD DECLARATIONS
-// ==========================================
-// Required to define recursive or pointer-based variant types (Expressions, Statements).
-
-struct BinaryExpr;
-struct NonBlockingAssign;
-struct IfStmt;
-struct BlockStmt;
-struct CaseStmt;
+// Forward declarations required for recursive variant and pointer members.
+struct BinaryExpression;
+struct NonBlockingAssignment;
+struct IfStatement;
+struct BlockStatement;
+struct CaseStatement;
 struct AlwaysBlock;
 
 // ==========================================
-// 4. AST BASIC TYPES & TERMINALS
+// 2. AST NODE TYPES — EXPRESSIONS
 // ==========================================
 
-/// @brief Represents an identifier (e.g., variable, wire, or port name).
+/**
+ * @brief AST leaf node representing a named identifier (e.g., a signal or variable name).
+ */
 struct Identifier
 {
-    std::string_view name;
+    std::string_view identifier_name; ///< The raw text of the identifier in the source.
 };
 
-/// @brief Represents a numeric literal.
+/**
+ * @brief AST leaf node representing a numeric literal (e.g., `8'hFF`, `0`, `1`).
+ */
 struct Number
 {
-    std::string_view value;
+    std::string_view numeric_value_string; ///< The raw text of the numeric literal in the source.
 };
 
-/// @brief Represents a bit-range slice (e.g., [msb:lsb]).
-// struct Range
-// {
-//     // Note: Expression variant is defined below, but C++ allows this structurally
-//     // since Range is only fully utilized later.
-//     // To be strictly safe, we will define `Expression` right after terminals.
-// };
+/**
+ * @brief A Verilog expression: either an identifier, a number, or a binary expression.
+ *
+ * @c BinaryExpression is stored as a pointer to break the recursive type definition
+ * and to allow allocation inside the @ref AbstractSyntaxTreeArena.
+ */
+using Expression = std::variant<Identifier, Number, BinaryExpression *>;
+
+/**
+ * @brief AST node for a binary operation (e.g., `a + b`, `x & y`).
+ */
+struct BinaryExpression
+{
+    std::string_view operator_symbol; ///< The operator token text (e.g., `"+"`, `"&"`).
+    Expression left_expression;       ///< The left-hand operand.
+    Expression right_expression;      ///< The right-hand operand.
+};
 
 // ==========================================
-// 5. AST EXPRESSIONS
+// 2. AST NODE TYPES — STATEMENTS
 // ==========================================
 
 /**
- * @brief An Expression can be an Identifier, a Number, or a pointer to a Binary Expression.
+ * @brief A Verilog statement: one of non-blocking assignment, if, block, or case.
+ *
+ * All variants are stored as pointers and must be allocated via @ref AbstractSyntaxTreeArena.
  */
-using Expression = std::variant<Identifier, Number, BinaryExpr *>;
+using Statement = std::variant<NonBlockingAssignment *, IfStatement *, BlockStatement *, CaseStatement *>;
 
-/// @brief Redefinition of Range with the complete Expression type available.
-struct RangeImpl // Renamed conceptually, but mapped structurally below
+/**
+ * @brief AST node for a non-blocking assignment (`lhs <= rhs`).
+ */
+struct NonBlockingAssignment
 {
-    Expression msb;
-    Expression lsb;
-};
-// Overriding Range forward declaration structure
-struct Range
-{
-    Expression msb;
-    Expression lsb;
+    Expression left_hand_side_expression;  ///< The target (left-hand side) of the assignment.
+    Expression right_hand_side_expression; ///< The value (right-hand side) being assigned.
 };
 
-/// @brief Represents a binary operation (e.g., a + b, a == b).
-struct BinaryExpr
+/**
+ * @brief AST node for an `if`/`else` statement.
+ */
+struct IfStatement
 {
-    std::string_view op; ///< The binary operator (e.g., "+", "-", "==")
-    Expression left;     ///< Left hand operand
-    Expression right;    ///< Right hand operand
+    Expression condition_expression;                 ///< The boolean condition being tested.
+    Statement true_branch_statement;                 ///< The statement executed when condition is true.
+    std::optional<Statement> false_branch_statement; ///< The optional `else` branch statement.
+};
+
+/**
+ * @brief AST node for a sequential `begin`/`end` block containing multiple statements.
+ */
+struct BlockStatement
+{
+    std::pmr::vector<Statement> contained_statements; ///< Ordered list of statements inside the block.
+};
+
+/**
+ * @brief AST node for a `case` statement.
+ */
+struct CaseStatement
+{
+    Expression condition_expression;                                  ///< The expression being switched on.
+    std::pmr::vector<std::pair<Expression, Statement>> case_branches; ///< Ordered list of (value, statement) arms.
+    std::optional<Statement> default_branch_statement;                ///< The optional `default` branch.
 };
 
 // ==========================================
-// 6. AST STATEMENTS
+// 3. AST NODE TYPES — MODULE STRUCTURE
 // ==========================================
 
 /**
- * @brief A Statement represents an executable instruction within a block.
+ * @brief Describes the edge sensitivity of a signal in an always block sensitivity list.
  */
-using Statement = std::variant<NonBlockingAssign *, IfStmt *, BlockStmt *, CaseStmt *>;
-
-/// @brief Represents a Verilog non-blocking assignment (lhs <= rhs;).
-struct NonBlockingAssign
+enum class EdgeType
 {
-    Expression lhs; ///< Target of the assignment
-    Expression rhs; ///< Value being assigned
+    None,         ///< Level-sensitive (used in combinational `always @(*)` blocks).
+    PositiveEdge, ///< Rising-edge sensitive (`posedge`).
+    NegativeEdge  ///< Falling-edge sensitive (`negedge`).
 };
 
-/// @brief Represents an if-else statement.
-struct IfStmt
-{
-    Expression condition;                  ///< The condition to evaluate
-    Statement true_branch;                 ///< Executed if condition is true
-    std::optional<Statement> false_branch; ///< Executed if condition is false (optional)
-};
-
-/// @brief Represents a begin...end block containing multiple statements.
-struct BlockStmt
-{
-    std::pmr::vector<Statement> statements; ///< List of statements inside the block
-};
-
-/// @brief Represents a Verilog case statement.
-struct CaseStmt
-{
-    Expression condition;                                        ///< The variable/expression being evaluated
-    std::pmr::vector<std::pair<Expression, Statement>> branches; ///< Case item branches mapping expression -> statement
-    std::optional<Statement> default_branch;                     ///< Optional default branch
-};
-
-// ==========================================
-// 7. AST MODULE & HARDWARE CONSTRUCTS
-// ==========================================
-
-/// @brief Clock edge types for sensitivity lists.
-enum class Edge
-{
-    None,    ///< Combinatorial (e.g., *)
-    Posedge, ///< Rising edge
-    Negedge  ///< Falling edge
-};
-
-/// @brief Represents a single signal in an always block's sensitivity list.
+/**
+ * @brief A single entry in an always block sensitivity list (e.g., `posedge clk`).
+ */
 struct Sensitivity
 {
-    Edge edge;         ///< The trigger edge (if any)
-    Identifier signal; ///< The signal name being monitored
+    EdgeType edge_trigger_type;   ///< The edge type triggering this sensitivity entry.
+    Identifier signal_identifier; ///< The signal being watched.
 };
 
-/// @brief Represents a Verilog always block.
+/**
+ * @brief AST node representing a Verilog `always` block.
+ */
 struct AlwaysBlock
 {
-    std::pmr::vector<Sensitivity> sensitivities; ///< Sensitivity list (e.g., @(posedge clk))
-    Statement body;                              ///< The block of code executed when triggered
+    std::pmr::vector<Sensitivity> sensitivity_list; ///< The list of sensitivity entries (the `@(...)` clause).
+    Statement body_statement;                       ///< The statement forming the body of the block.
 
     /**
-     * @brief Checks if the always block represents purely combinatorial logic.
-     * @return true if no edges (posedge/negedge) are specified.
+     * @brief Determines whether this block is purely combinational.
+     *
+     * A block is considered combinational if every entry in the sensitivity
+     * list has @c EdgeType::None (i.e., no posedge/negedge triggers).
+     *
+     * @return @c true if all sensitivities are level-sensitive, @c false otherwise.
      */
-    bool is_combinatorial() const
+    bool is_combinational_block() const
     {
-        for (const auto &s : sensitivities)
-        {
-            if (s.edge != Edge::None)
+        for (const auto &sensitivity_item : sensitivity_list)
+            if (sensitivity_item.edge_trigger_type != EdgeType::None)
                 return false;
-        }
         return true;
     }
 };
 
-/// @brief Port direction for a hardware module.
-enum class PortDir
+/**
+ * @brief Describes an inclusive bit-range slice (e.g., `[7:0]`).
+ */
+struct BitRange
 {
-    Input,
-    Output,
-    Inout
-};
-
-/// @brief Represents a module port definition.
-struct Port
-{
-    PortDir direction;          ///< Input, Output, or Inout
-    bool is_reg;                ///< True if declared as a register type
-    std::optional<Range> range; ///< Bit width/range (if provided)
-    std::string_view name;      ///< Name of the port
-};
-
-/// @brief Represents a parameter definition inside a module.
-struct Parameter
-{
-    std::string_view name;    ///< Name of the parameter
-    Expression default_value; ///< Default assigned expression
+    Expression most_significant_bit;  ///< The upper (MSB) bound expression.
+    Expression least_significant_bit; ///< The lower (LSB) bound expression.
 };
 
 /**
- * @brief High-level module item. Currently supports Always Blocks.
+ * @brief The direction of a module port.
+ */
+enum class PortDirection
+{
+    Input,  ///< An input port (`input`).
+    Output, ///< An output port (`output`).
+    InOut   ///< A bidirectional port (`inout`).
+};
+
+/**
+ * @brief AST node describing a single module port declaration.
+ */
+struct Port
+{
+    PortDirection direction;           ///< Whether the port is input, output, or inout.
+    bool is_register_type;             ///< @c true if the port is declared as `reg`.
+    std::optional<BitRange> bit_range; ///< Optional bit-width range (e.g., `[7:0]`); absent for scalar ports.
+    std::string_view port_name;        ///< The name of the port as it appears in the source.
+};
+
+/**
+ * @brief AST node describing a module parameter declaration (e.g., `parameter WIDTH = 8`).
+ */
+struct Parameter
+{
+    std::string_view parameter_name;     ///< The name of the parameter.
+    Expression default_value_expression; ///< The default value assigned to the parameter.
+};
+
+/**
+ * @brief A top-level item inside a module body.
+ *
+ * Currently only `always` blocks are supported as module-level items.
  */
 using ModuleItem = std::variant<AlwaysBlock *>;
 
-/// @brief Represents a complete Hardware Module.
+/**
+ * @brief AST node representing a complete Verilog module definition.
+ */
 struct Module
 {
-    std::string_view name;                  ///< Module identifier name
-    std::pmr::vector<Parameter> parameters; ///< List of parameters (e.g., #(...))
-    std::pmr::vector<Port> ports;           ///< List of I/O ports
-    std::pmr::vector<ModuleItem> items;     ///< Internal structural items (always blocks, etc.)
+    std::string_view module_name;                  ///< The declared name of the module.
+    std::pmr::vector<Parameter> module_parameters; ///< List of `parameter` declarations.
+    std::pmr::vector<Port> module_ports;           ///< List of port declarations.
+    std::pmr::vector<ModuleItem> module_items;     ///< List of top-level items in the module body.
 };
 
 // ==========================================
-// 8. PARSER
+// 4. RECURSIVE DESCENT PARSER
 // ==========================================
 
 /**
- * @brief Recursive descent parser for converting token streams into an AST.
+ * @brief A recursive-descent parser for a subset of the Verilog HDL.
+ *
+ * Consumes tokens from a @ref LexicalAnalyzer and builds an AST whose nodes
+ * are allocated inside a shared @ref AbstractSyntaxTreeArena. The parser
+ * exposes a single public entry point, @ref parse_module_definition(), which
+ * returns a fully populated @ref Module.
+ *
+ * Typical usage:
+ * @code
+ * std::string src = load_file("top.v");
+ * AbstractSyntaxTreeArena arena;
+ * VerilogParser parser(src, arena);
+ * Module mod = parser.parse_module_definition();
+ * @endcode
  */
-class Parser
+class VerilogParser
 {
-    Lexer lexer;         ///< The lexical analyzer supplying tokens
-    AstArena &arena;     ///< Reference to the memory arena for AST node allocation
-    Token current_token; ///< The token currently being analyzed
+    LexicalAnalyzer lexical_analyzer;           ///< The underlying token stream.
+    AbstractSyntaxTreeArena &syntax_tree_arena; ///< Arena used to allocate all AST nodes.
+    Token current_token;                        ///< The most recently consumed token (lookahead).
 
     /**
-     * @brief Consumes the current token and fetches the next one from the lexer.
+     * @brief Advances @ref current_token to the next token from the lexer.
      */
-    void advance();
-    /**
-     * @brief Checks if the current token matches the given type (and optionally content).
-     *        Advances to the next token if it matches.
-     *
-     * @param type The expected token type.
-     * @param content The expected string content (optional).
-     * @return true if matched and advanced, false otherwise.
-     */
-    bool match(TokenType type, std::string_view content);
+    void advance_to_next_token();
 
     /**
-     * @brief Enforces that the current token matches the given type/content.
-     *        Aborts the program with a syntax error message if it fails.
+     * @brief Checks whether the current token matches the given type and content,
+     *        and if so, advances past it.
      *
-     * @param type The expected token type.
-     * @param content The expected string content.
+     * @param expected_type    The @ref TokenType the current token must have.
+     * @param expected_content The exact text the current token must contain.
+     * @return @c true if the token matched and was consumed, @c false otherwise.
      */
-    void expect(TokenType type, std::string_view content);
+    bool match_and_consume_token(TokenType expected_type, std::string_view expected_content);
+
+    /**
+     * @brief Asserts that the current token matches the given type and content,
+     *        then advances past it. Terminates (or throws) on mismatch.
+     *
+     * @param expected_type    The @ref TokenType the current token must have.
+     * @param expected_content The exact text the current token must contain.
+     */
+    void expect_token_or_fail(TokenType expected_type, std::string_view expected_content);
 
 public:
     /**
-     * @brief Construct a new Parser object.
+     * @brief Constructs a VerilogParser for the given source code.
      *
-     * @param src The source code string to be parsed.
-     * @param arena The AST arena memory allocator.
+     * Initializes the internal lexer and reads the first lookahead token.
+     *
+     * @param source_code       A view of the Verilog source text to parse.
+     *                          Must remain valid for the lifetime of this object.
+     * @param syntax_tree_arena The arena into which all AST nodes will be allocated.
      */
-    Parser(std::string_view src, AstArena &arena);
+    VerilogParser(std::string_view source_code, AbstractSyntaxTreeArena &syntax_tree_arena);
 
     /**
-     * @brief Parses the entire hardware module from the source token stream.
-     * @return Module The root node of the constructed AST.
+     * @brief Parses a complete Verilog `module` ... `endmodule` definition.
+     *
+     * This is the top-level entry point of the parser. It consumes the entire
+     * module declaration including its parameter list, port list, and body items.
+     *
+     * @return A @ref Module struct populated with the parsed AST data.
      */
-    Module parseModule();
+    Module parse_module_definition();
 
 private:
-    // Internal parsing routines corresponding to grammar rules
+    /**
+     * @brief Parses a single port declaration (direction, type, optional range, and name).
+     *
+     * @return A @ref Port struct describing the parsed port.
+     */
+    Port parse_port_definition();
 
-    Port parsePort();
-    AlwaysBlock *parseAlwaysBlock();
-    Statement parseStatement();
-    Expression parseExpression();
+    /**
+     * @brief Parses an `always` block, including its sensitivity list and body.
+     *
+     * The returned node is allocated inside @ref syntax_tree_arena.
+     *
+     * @return A pointer to the newly allocated @ref AlwaysBlock node.
+     */
+    AlwaysBlock *parse_always_block_definition();
+
+    /**
+     * @brief Parses a single statement (assignment, if, begin/end block, or case).
+     *
+     * Dispatches to the appropriate sub-parser based on the current token.
+     *
+     * @return A @ref Statement variant holding the parsed statement node.
+     */
+    Statement parse_statement_definition();
+
+    /**
+     * @brief Parses a single expression (identifier, number literal, or binary expression).
+     *
+     * Handles operator precedence by recursive or iterative sub-parsing as needed.
+     *
+     * @return An @ref Expression variant holding the parsed expression.
+     */
+    Expression parse_expression();
 };
