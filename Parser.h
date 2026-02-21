@@ -101,12 +101,12 @@ struct Number
 };
 
 /// @brief Represents a bit-range slice (e.g., [msb:lsb]).
-struct Range
-{
-    // Note: Expression variant is defined below, but C++ allows this structurally
-    // since Range is only fully utilized later.
-    // To be strictly safe, we will define `Expression` right after terminals.
-};
+// struct Range
+// {
+//     // Note: Expression variant is defined below, but C++ allows this structurally
+//     // since Range is only fully utilized later.
+//     // To be strictly safe, we will define `Expression` right after terminals.
+// };
 
 // ==========================================
 // 5. AST EXPRESSIONS
@@ -270,11 +270,7 @@ class Parser
     /**
      * @brief Consumes the current token and fetches the next one from the lexer.
      */
-    void advance()
-    {
-        current_token = lexer.next();
-    }
-
+    void advance();
     /**
      * @brief Checks if the current token matches the given type (and optionally content).
      *        Advances to the next token if it matches.
@@ -283,15 +279,7 @@ class Parser
      * @param content The expected string content (optional).
      * @return true if matched and advanced, false otherwise.
      */
-    bool match(TokenType type, std::string_view content = "")
-    {
-        if (current_token.type == type && (content.empty() || current_token.content == content))
-        {
-            advance();
-            return true;
-        }
-        return false;
-    }
+    bool match(TokenType type, std::string_view content);
 
     /**
      * @brief Enforces that the current token matches the given type/content.
@@ -300,15 +288,7 @@ class Parser
      * @param type The expected token type.
      * @param content The expected string content.
      */
-    void expect(TokenType type, std::string_view content = "")
-    {
-        if (!match(type, content))
-        {
-            std::cerr << "Syntax Error: Expected '" << content
-                      << "' but got '" << current_token.content << "'\n";
-            exit(1);
-        }
-    }
+    void expect(TokenType type, std::string_view content);
 
 public:
     /**
