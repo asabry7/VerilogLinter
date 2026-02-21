@@ -6,171 +6,75 @@ Token Lexer::next()
 {
     while (true)
     {
+        if (current >= end)
+            return {TokenType::EndToken, {}};
 
-        /* Skip White spaces */
         while (current < end && isSpace(*current))
-        {
             current++;
-        }
+        if (current >= end)
+            return {TokenType::EndToken, {}};
 
-        /* Handle Comments: */
-        if (*current == '/')
+        if (*current == '/' && current + 1 < end)
         {
-            /* Single line comments */
             if (*(current + 1) == '/')
             {
                 current += 2;
-
                 while (current < end && *current != '\n')
-                {
                     current++;
-                }
+                continue;
             }
-            /* Multi line comments */
-            else if (*(current + 1) == '*')
+            if (*(current + 1) == '*')
             {
                 current += 2;
-
-                while (current < end && !(*current == '*' && *(current + 1) == '/'))
-                {
+                while (current + 1 < end && !(*current == '*' && *(current + 1) == '/'))
                     current++;
-                }
-                current += 2;
+                if (current + 1 < end)
+                    current += 2;
+                continue;
             }
-
-            continue;
-        }
-        if (current >= end)
-        {
-            return {TokenType::EndToken, {}};
         }
 
         const char *start = current;
 
-        /* Handle Numbers */
-        if (isNumeric(*current))
+        // Numbers (Supports formats like 8'h00)
+        if (isDigit(*current))
         {
-            while (current < end && isNumeric(*current))
-            {
+            while (current < end && (isDigit(*current) || isAlpha(*current) || *current == '\''))
                 current++;
-            }
-
-            if (*current == '\'') // a single qutation '
-            {
-                current++;
-            }
-
-            while (current < end && isAlpha(*current))
-                current++; // handle Size and Type (Hexa h, Decimal d, etc)
-            while (current < end && isNumeric(*current))
-            {
-                current++; // handle bits that comes afterward
-                if (*current == '_')
-                    current++;
-            }
-
             return {TokenType::Number, std::string_view(start, current - start)};
         }
 
-        /* Handle Keywords and Identifiers*/
         if (isAlpha(*current))
         {
-            while (current < end && isAlpha(*current))
-            {
+            while (current < end && (isAlpha(*current) || isDigit(*current)))
                 current++;
-            }
 
-            auto substring = std::string_view(start, current - start);
-            if (isKeyword(substring))
-            {
-                return {TokenType::Keyword, std::string_view(start, current - start)};
-            }
-            else
-            {
-                return {TokenType::Identifier, std::string_view(start, current - start)};
-            }
+            std::string_view text(start, current - start);
+            if (isKeyword(text))
+                return {TokenType::Keyword, text};
+            return {TokenType::Identifier, text};
         }
 
-        /* Handle Symbols */
-        if (*current == '>')
+        // Multi-character Symbols (like <=, ==)
+        if (current + 1 < end && (*current == '<' || *current == '=') && *(current + 1) == '=')
         {
-            current++;
-            if (current < end && *(current + 1) == '=')
-                current++;
-            return {TokenType::Symbol, std::string_view(start, current - start)};
-        }
-        else if (*current == '<')
-        {
-            current++;
-            if (current < end && *(current + 1) == '=')
-                current++;
-            return {TokenType::Symbol, std::string_view(start, current - start)};
-        }
-        else if (*current == '!')
-        {
-            current++;
-            if (current < end && *(current + 1) == '=')
-                current++;
-            return {TokenType::Symbol, std::string_view(start, current - start)};
-        }
-        else if (*current == '=')
-        {
-            current++;
-            if (current < end && *(current + 1) == '=')
-                current++;
-            return {TokenType::Symbol, std::string_view(start, current - start)};
-        }
-        else if (*current == '+' | *current == '-' | *current == '*' | *current == '/' |
-                 *current == '(' | *current == ')' | *current == '[' | *current == ']' |
-                 *current == '#')
-        {
-            current++;
-            return {TokenType::Symbol, std::string_view(start, current - start)};
+            current += 2;
+            return {TokenType::Symbol, std::string_view(start, 2)};
         }
 
-        /* Fallback: return Unknown */
         current++;
-        return {TokenType::Unknown, std::string_view(start, current - start)};
+        return {TokenType::Symbol, std::string_view(start, 1)};
     }
 }
 
-/* Helper Functions: */
-inline bool Lexer::isNumeric(char character)
-{
-    return (character >= '0' && character <= '9');
-}
-inline bool Lexer::isAlpha(char character)
-{
-    /* character | 32 == converting to lower case */
-    return ((character | 32) >= 'a' && (character | 32) <= 'z') || character == '_';
-}
-inline bool Lexer::isSpace(char character)
-{
-    return (character == ' ' | character == '\n' | character == '\t' | character == '\r');
-}
+bool Lexer::isDigit(char c) { return c >= '0' && c <= '9'; }
+bool Lexer::isAlpha(char c) { return ((c | 32) >= 'a' && (c | 32) <= 'z') || c == '_'; }
+bool Lexer::isSpace(char c) { return c == ' ' || c == '\n' || c == '\t' || c == '\r'; }
 bool Lexer::isKeyword(std::string_view s)
 {
-    switch (s.size())
-    {
-    case 2:
-        return (s == "if");
-
-    case 3:
-        return (s == "reg" || s == "end");
-
-    case 5:
-        return (s == "input" || s == "begin");
-
-    case 6:
-        return (s == "module");
-
-    case 8:
-        return (s == "parameter");
-
-    case 9:
-        return (s == "endmodule");
-
-    default:
-        return false;
-    }
+    return s == "module" || s == "endmodule" || s == "input" || s == "output" ||
+           s == "inout" || s == "reg" || s == "wire" || s == "always" ||
+           s == "posedge" || s == "negedge" || s == "begin" || s == "end" ||
+           s == "if" || s == "else" || s == "parameter" || s == "or" ||
+           s == "case" || s == "endcase" || s == "default";
 }

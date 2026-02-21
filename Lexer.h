@@ -39,7 +39,8 @@ private:
     const char *end;
 
     /* Helper Functions: */
-    static inline bool isNumeric(char character);
+    // static inline bool isNumeric(char character);
+    bool isDigit(char c);
     static inline bool isAlpha(char character);
     static inline bool isSpace(char character);
     static bool isKeyword(std::string_view s);
