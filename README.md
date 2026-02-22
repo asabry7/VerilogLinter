@@ -1,136 +1,96 @@
 # 🧠 Modern C++ Verilog Static Analyzer
 
-A lightweight **Verilog parser and static linter** built in **C++17**.\
-It demonstrates modern C++ applied to a compiler-style EDA toolchain:
-lexical analysis, recursive-descent parsing, arena-based AST
-construction, and static semantic analysis.
+A lightweight **Verilog parser and static linter** built in **C++17**, demonstrating compiler-style EDA toolchain design: zero-copy lexing, recursive-descent parsing, arena-based AST construction, and static semantic analysis — with no external dependencies.
 
-------------------------------------------------------------------------
-
+---
 
 ## 📑 Table of Contents
 
-1. [Overview](#overview)
-2. [Build & Run](#build--run)
-3. [Architecture](#architecture)
-   - [Lexer](#lexer)
-   - [Parser](#parser)
-   - [Linter](#linter)
-4. [Features](#features)
-5. [Limitations](#limitations)
-6. [Modern C++ Techniques](#modern-c-techniques)
-7. [Performance](#performance)
+1. [Architecture](#architecture)
+2. [Lint Checks](#lint-checks)
+3. [Performance](#performance)
+4. [Modern C++ Design](#modern-c-design)
+5. [Build & Run](#build--run)
+6. [Limitations](#limitations)
 
-------------------------------------------------------------------------
+---
 
-## Overview
+## Architecture
 
-This project implements a simplified Verilog static analyzer consisting
-of:
+The pipeline has three stages, each designed around allocation efficiency and zero-copy data flow:
 
--   **Lexer** -- zero-copy tokenization\
--   **Parser** -- recursive descent AST builder\
--   **Arena-allocated AST** -- cache-friendly memory model\
--   **Static Linter** -- semantic and structural rule checks
+**Lexer** — Zero-copy tokenization via `std::string_view`. Manual character classification (no regex), no heap allocation during the lex pass. Handles identifiers, keywords, Verilog number literals (`8'hFF`), and `//` / `/* */` comments.
 
-The focus is architectural clarity and performance rather than full IEEE
-Verilog coverage.
+**Parser** — Recursive-descent parser that builds an AST entirely within a PMR monotonic arena. Nodes are represented with `std::variant`. Supports modules, parameters, ports, `always` blocks, non-blocking assignments, `if/else`, and `case` statements.
 
-------------------------------------------------------------------------
+**Linter** — Semantic and structural analysis pass over the AST, performing constant folding and bit-width propagation to power the checks below.
+
+---
+
+## Lint Checks
+
+- Multi-driven registers
+- Bit-width mismatches and overflow
+- Latch inference
+- Missing `default` in `case`
+- Uninitialized registers
+- Unreachable FSM states
+- Constant expression evaluation
+
+---
+
+## Performance
+
+Benchmarked on a **700K-line, 25 MB** Verilog file with [`hyperfine`](https://github.com/sharkdp/hyperfine) (10 warm-up runs):
+
+| Metric | Result |
+|--------|--------|
+| Mean | **682.7 ms ± 4.8 ms** |
+| Min / Max | 676.5 ms / 690.9 ms |
+
+Performance is driven by two architectural decisions: **PMR arena allocation** eliminates per-node `malloc` overhead throughout the parse phase, and the **zero-copy lexer** avoids any string materialization — tokens are `string_view` slices into the original source buffer. The result is that nearly all runtime is I/O and process startup; the analysis itself is negligible.
+
+Hyperfine usage:
+```bash
+asabry@asabry-pc:~/Cpp/Linter/build$ hyperfine --warmup 10 './VerilogLinter ../huge_adder.v'
+Benchmark 1: ./VerilogLinter ../huge_adder.v
+  Time (mean ± σ):     682.7 ms ±   4.8 ms    [User: 667.5 ms, System: 15.0 ms]
+  Range (min … max):   676.5 ms … 690.9 ms    10 runs
+
+```
+
+---
+
+## Modern C++ Design
+
+| Area | Technique |
+|------|-----------|
+| **Zero-copy lexing** | `std::string_view` throughout the token stream |
+| **Arena allocation** | `std::pmr::monotonic_buffer_resource` + `std::pmr::polymorphic_allocator` |
+| **Type-safe AST nodes** | `std::variant` + `std::visit` |
+| **Fast number parsing** | `std::from_chars` (no locale, no allocation) |
+| **Null safety** | `std::optional` for fallible lookups |
+| **Scoped enumerations** | `enum class` for token and node kinds |
+
+---
 
 ## Build & Run
 
-``` bash
-mkdir build
-cd build
+```bash
+mkdir build && cd build
 cmake ..
 make
 
 ./VerilogLinter file.v
 ```
 
-------------------------------------------------------------------------
-
-## Architecture
-
-### Lexer
-
--   Zero-copy tokenization using `std::string_view`
--   Manual character classification (no regex)
--   Supports identifiers, keywords, number literals (e.g., `8'hFF`),
-    symbols
--   Skips `//` and `/* */` comments
--   No dynamic allocation during lexing
-
-### Parser
-
--   Recursive-descent parsing
--   Arena allocation using PMR
--   Supports modules, parameters, ports, always blocks, non-blocking
-    assignments, if/else, and case statements
--   Uses `std::variant` for AST node representation
-
-### Linter
-
-Performs static semantic and structural checks: - Constant expression
-evaluation - Bit-width inference - Multi-driven registers - Width
-mismatches / overflow - Latch inference - Missing `default` in case -
-Uninitialized registers - Unreachable FSM states
-
-------------------------------------------------------------------------
-
-## Features
-
--   Zero-copy lexer
--   Arena-based AST allocation
--   Recursive-descent parsing
--   Constant folding
--   Bit-width propagation
--   Structural HDL lint rules
--   No external dependencies
-
-------------------------------------------------------------------------
+---
 
 ## Limitations
 
--   Subset of Verilog (not full IEEE spec)
--   Limited operator support (`+`, `-`, `==`)
--   No blocking assignments (`=`)
--   No generate blocks
--   No hierarchical modules
--   No elaboration phase
--   Simplified error handling (`exit(1)`)
+This tool targets a practical subset of Verilog, not the full IEEE spec:
 
-------------------------------------------------------------------------
-
-## Modern C++ Techniques
-
-### Memory
-
--   `std::pmr::monotonic_buffer_resource`
--   `std::pmr::polymorphic_allocator`
-
-### Type Safety
-
--   `std::variant`
--   `std::optional`
--   `std::visit`
--   `enum class`
-
-### Performance
-
--   `std::string_view`
--   `std::from_chars`
--   Deterministic allocation strategy
-
-------------------------------------------------------------------------
-
-## Performance
-
-Benchmarked with `hyperfine` (930 runs, 10 warmups):
-
--   Best: 0.6 ms\
--   Average: 2.1 ms
-
-Runtime is dominated by process startup and dynamic linking.\
-Performance gains come from PMR arena allocation and zero-copy design.
+- Operators limited to `+`, `-`, `==`
+- No blocking assignments (`=`), generate blocks, or hierarchical modules
+- No elaboration phase
+- Simplified error handling (`exit(1)`)
