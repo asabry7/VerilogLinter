@@ -1,6 +1,6 @@
 # 🧠 Modern C++ Verilog Static Analyzer
 
-A lightweight **Verilog parser and static linter** built in **C++17**, demonstrating compiler-style EDA toolchain design: zero-copy lexing, recursive-descent parsing, arena-based AST construction, and static semantic analysis — with no external dependencies.
+A lightweight **Verilog parser and static linter** built in **C++17**, demonstrating compiler-style EDA toolchain design: zero-copy lexing, parsing, arena-based AST construction, and static semantic analysis — with no external dependencies.
 
 ---
 
@@ -50,27 +50,19 @@ Benchmarked on a **700K-line, 25 MB** Verilog file with [`hyperfine`](https://gi
 
 Performance is driven by two architectural decisions: **PMR arena allocation** eliminates per-node `malloc` overhead throughout the parse phase, and the **zero-copy lexer** avoids any string materialization — tokens are `string_view` slices into the original source buffer. The result is that nearly all runtime is I/O and process startup; the analysis itself is negligible.
 
-Hyperfine usage:
-```bash
-asabry@asabry-pc:~/Cpp/Linter/build$ hyperfine --warmup 10 './VerilogLinter ../huge_adder.v'
-Benchmark 1: ./VerilogLinter ../huge_adder.v
-  Time (mean ± σ):     682.7 ms ±   4.8 ms    [User: 667.5 ms, System: 15.0 ms]
-  Range (min … max):   676.5 ms … 690.9 ms    10 runs
-
-```
-
 ---
+
 
 ## Modern C++ Design
 
-| Area | Technique |
-|------|-----------|
-| **Zero-copy lexing** | `std::string_view` throughout the token stream |
-| **Arena allocation** | `std::pmr::monotonic_buffer_resource` + `std::pmr::polymorphic_allocator` |
-| **Type-safe AST nodes** | `std::variant` + `std::visit` |
-| **Fast number parsing** | `std::from_chars` (no locale, no allocation) |
-| **Null safety** | `std::optional` for fallible lookups |
-| **Scoped enumerations** | `enum class` for token and node kinds |
+| Area | Technique | Effect |
+|------|-----------|--------|
+| **Zero-copy lexing** | `std::string_view` throughout the token stream | No heap allocation during tokenization; tokens are slices into the source buffer |
+| **Arena allocation** | `std::pmr::monotonic_buffer_resource` + `std::pmr::polymorphic_allocator` | Eliminates per-node `malloc`; sequential bump allocation improves cache locality |
+| **Type-safe AST nodes** | `std::variant` + `std::visit` | Stack-allocated tagged union; avoids vtable dispatch and pointer indirection |
+| **Fast number parsing** | `std::from_chars` (no locale, no allocation) | Faster than `stoi`/`strtol`; no locale lookup, no string copy |
+| **Null safety** | `std::optional` for fallible lookups | Zero overhead vs. raw pointer; communicates absence without heap allocation |
+| **Scoped enumerations** | `enum class` for token and node kinds | No implicit conversion overhead; compiler-enforced type safety at zero runtime cost |
 
 ---
 
