@@ -333,7 +333,7 @@ void VerilogStaticLinter::analyze_statement_for_violations(const Statement &stat
                                uint32_t lhs_width = evaluated_signal_widths[assigned_name];
                                if (rhs_result.bit_width_size > lhs_width)
                                    report_violation(
-                                       "Structural Width Mismatch (Carry Overflow): Assigning a " +
+                                       "Arithmatic Overflow: Assigning a " +
                                        std::to_string(rhs_result.bit_width_size) +
                                        "-bit mathematical result to a " +
                                        std::to_string(lhs_width) +
