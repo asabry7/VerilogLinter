@@ -76,9 +76,29 @@ public:
      */
     Token get_next_token();
 
+    /**
+     * @brief increments the pointer by one.
+     *
+     */
+    void advance();
+
+    /**
+     * @brief increments the pointer by a given count.
+     *
+     */
+    void advance(size_t count);
+
+    /**
+     * @brief returns the current line number.
+     *
+     * @return The next @ref value of the current line number.
+     */
+    int get_current_line_number_value();
+
 private:
     const char *current_character_pointer; ///< Points to the next character to be consumed.
     const char *end_character_pointer;     ///< Points one past the last character of the source.
+    int current_line_number;               ///< Counter that keeps track of the current line number
 
     /**
      * @brief Checks whether a character is a decimal digit (0–9).

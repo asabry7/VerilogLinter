@@ -29,7 +29,7 @@ void VerilogParser::expect_token_or_fail(TokenType expected_type, std::string_vi
 {
     if (!match_and_consume_token(expected_type, expected_content))
     {
-        std::cerr << "Syntax Error: Expected '" << expected_content
+        std::cerr << "Syntax Error in Line: " << lexical_analyzer.get_current_line_number_value() << " Expected '" << expected_content
                   << "' but got '" << current_token.content << "'\n";
         exit(1);
     }

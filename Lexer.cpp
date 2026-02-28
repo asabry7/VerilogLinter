@@ -4,10 +4,30 @@
 // We never copy the source — all tokens will be string_views into this original buffer.
 LexicalAnalyzer::LexicalAnalyzer(std::string_view source_code)
     : current_character_pointer(source_code.data()),
-      end_character_pointer(source_code.data() + source_code.size())
+      end_character_pointer(source_code.data() + source_code.size()),
+      current_line_number(1)
 {
 }
 
+void LexicalAnalyzer::advance()
+{
+    if (current_character_pointer < end_character_pointer &&
+        *current_character_pointer == '\n')
+    {
+        current_line_number++;
+    }
+
+    current_character_pointer++;
+}
+
+void LexicalAnalyzer::advance(size_t count)
+{
+    while (count-- > 0 &&
+           current_character_pointer < end_character_pointer)
+    {
+        advance(); // reuse the safe single-step logic
+    }
+}
 Token LexicalAnalyzer::get_next_token()
 {
     // The outer loop lets us skip whitespace and comments and then retry,
@@ -20,7 +40,7 @@ Token LexicalAnalyzer::get_next_token()
 
         // ── Skip all consecutive whitespace characters ──
         while (current_character_pointer < end_character_pointer && is_whitespace_character(*current_character_pointer))
-            current_character_pointer++;
+            advance();
 
         // After skipping whitespace we may have reached the end.
         if (current_character_pointer >= end_character_pointer)
@@ -32,23 +52,23 @@ Token LexicalAnalyzer::get_next_token()
             // ── Single-line comment: skip everything up to (but not including) the newline ──
             if (*(current_character_pointer + 1) == '/')
             {
-                current_character_pointer += 2; // step past the '//'
+                advance(2); // step past the '//'
                 while (current_character_pointer < end_character_pointer && *current_character_pointer != '\n')
-                    current_character_pointer++;
+                    advance();
                 continue; // restart the outer loop to look for the next real token
             }
 
             // ── Block comment: scan forward until the closing '*/' sequence ──
             if (*(current_character_pointer + 1) == '*')
             {
-                current_character_pointer += 2; // step past the '/*'
+                advance(2); // step past the '/*'
                 // Keep advancing until we find '*' immediately followed by '/'
                 while (current_character_pointer + 1 < end_character_pointer &&
                        !(*current_character_pointer == '*' && *(current_character_pointer + 1) == '/'))
-                    current_character_pointer++;
+                    advance();
                 // Step past the closing '*/' if we haven't hit the end
                 if (current_character_pointer + 1 < end_character_pointer)
-                    current_character_pointer += 2;
+                    advance(2);
                 continue; // restart the outer loop
             }
         }
@@ -67,7 +87,7 @@ Token LexicalAnalyzer::get_next_token()
                    (is_digit_character(*current_character_pointer) ||
                     is_alphabet_character(*current_character_pointer) ||
                     *current_character_pointer == '\'')) // apostrophe separates size from base
-                current_character_pointer++;
+                advance();
 
             // The full literal (e.g. "8'hFF") is now spanned by [start, current).
             return {TokenType::NumberLiteral,
@@ -83,7 +103,7 @@ Token LexicalAnalyzer::get_next_token()
             while (current_character_pointer < end_character_pointer &&
                    (is_alphabet_character(*current_character_pointer) ||
                     is_digit_character(*current_character_pointer)))
-                current_character_pointer++;
+                advance();
 
             std::string_view extracted_text(start_character_pointer,
                                             current_character_pointer - start_character_pointer);
@@ -103,7 +123,7 @@ Token LexicalAnalyzer::get_next_token()
             (*current_character_pointer == '<' || *current_character_pointer == '=') &&
             *(current_character_pointer + 1) == '=')
         {
-            current_character_pointer += 2; // consume both characters
+            advance(2); // consume both characters
             return {TokenType::Symbol, std::string_view(start_character_pointer, 2)};
         }
 
@@ -151,4 +171,9 @@ bool LexicalAnalyzer::is_verilog_keyword(std::string_view string_view_input)
            string_view_input == "parameter" || string_view_input == "or" ||
            string_view_input == "case" || string_view_input == "endcase" ||
            string_view_input == "default";
+}
+
+int LexicalAnalyzer::get_current_line_number_value()
+{
+    return current_line_number;
 }
