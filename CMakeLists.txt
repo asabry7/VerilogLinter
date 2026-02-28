@@ -9,6 +9,7 @@ add_executable(VerilogLinter
     Lexer.cpp
     Parser.cpp
     Linter.cpp
+    utils.cpp
 )
 
 target_include_directories(VerilogLinter PRIVATE ${CMAKE_SOURCE_DIR})
