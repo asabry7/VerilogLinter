@@ -7,6 +7,7 @@
 #include "Parser.h"
 #include "Linter.h"
 #include "utils.h"
+#include "AstExporter.h"
 
 // Main entry point for the static analysis hardware tool
 int main(int argument_count, char *argument_values[])
@@ -42,6 +43,16 @@ int main(int argument_count, char *argument_values[])
 
     // Convert source into a parsed syntax tree
     Module abstract_syntax_tree_root = verilog_parser.parse_module_definition();
+
+    // Export to JSON
+    json ast_json = AstExporter::export_module(abstract_syntax_tree_root);
+
+    // Save to file
+    std::ofstream json_file("ast_output.json");
+    json_file << ast_json.dump(4); // "4" is for pretty-printing with 4 spaces indent
+    json_file.close();
+
+    std::cout << "Successfully exported AST to ast_output.json\n";
 
     std::cout << "=== PARSED VERILOG MODULE ===\n";
     std::cout << "Module Name: " << abstract_syntax_tree_root.module_name << "\n";

@@ -10,6 +10,7 @@ add_executable(VerilogLinter
     Parser.cpp
     Linter.cpp
     utils.cpp
+    AstExporter.cpp
 )
 
 target_include_directories(VerilogLinter PRIVATE ${CMAKE_SOURCE_DIR})
