@@ -2,6 +2,7 @@
 #include <fstream>
 #include <filesystem>
 #include <sstream>
+#include <getopt.h>
 
 #include "Lexer.h"
 #include "Parser.h"
@@ -9,17 +10,36 @@
 #include "utils.h"
 #include "AstExporter.h"
 
-// Main entry point for the static analysis hardware tool
 int main(int argument_count, char *argument_values[])
 {
-    // Ensure correct invocation arguments
-    if (argument_count != 2)
+    std::string ast_output_path;
+
+    static struct option long_options[] = {
+        {"export-ast", required_argument, nullptr, 'e'},
+        {nullptr, 0, nullptr, 0}};
+
+    int opt;
+    while ((opt = getopt_long(argument_count, argument_values, "", long_options, nullptr)) != -1)
     {
-        std::cerr << "Usage: " << argument_values[0] << " <verilog_file.v>\n";
+        switch (opt)
+        {
+        case 'e':
+            ast_output_path = optarg;
+            break;
+        default:
+            std::cerr << "Usage: " << argument_values[0] << " <verilog_file.v> [--export-ast <output.json>]\n";
+            return 1;
+        }
+    }
+
+    // The verilog file should be the remaining non-option argument
+    if (optind >= argument_count)
+    {
+        std::cerr << "Usage: " << argument_values[0] << " <verilog_file.v> [--export-ast <output.json>]\n";
         return 1;
     }
 
-    std::filesystem::path source_file_path(argument_values[1]);
+    std::filesystem::path source_file_path(argument_values[optind]);
     if (!std::filesystem::exists(source_file_path))
     {
         std::cerr << "Error: File '" << source_file_path << "' not found.\n";
@@ -44,15 +64,20 @@ int main(int argument_count, char *argument_values[])
     // Convert source into a parsed syntax tree
     Module abstract_syntax_tree_root = verilog_parser.parse_module_definition();
 
-    // Export to JSON
-    json ast_json = AstExporter::export_module(abstract_syntax_tree_root);
-
-    // Save to file
-    std::ofstream json_file("ast_output.json");
-    json_file << ast_json.dump(4); // "4" is for pretty-printing with 4 spaces indent
-    json_file.close();
-
-    std::cout << "Successfully exported AST to ast_output.json\n";
+    // Export to JSON only if --export-ast flag was provided
+    if (!ast_output_path.empty())
+    {
+        json ast_json = AstExporter::export_module(abstract_syntax_tree_root);
+        std::ofstream json_file(ast_output_path);
+        if (!json_file.is_open())
+        {
+            std::cerr << "Error: Could not write to '" << ast_output_path << "'.\n";
+            return 1;
+        }
+        json_file << ast_json.dump(4);
+        json_file.close();
+        std::cout << "Successfully exported AST to " << ast_output_path << "\n";
+    }
 
     std::cout << "=== PARSED VERILOG MODULE ===\n";
     std::cout << "Module Name: " << abstract_syntax_tree_root.module_name << "\n";
